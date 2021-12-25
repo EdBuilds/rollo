@@ -1,5 +1,5 @@
 [package]
-name = "Rollo"
+name = "rollo"
 version = "0.1.0"
 authors = ["EdBuilds"]
 edition = "2018"
@@ -58,7 +58,11 @@ esp-idf-sys = { version = "0.28.1", features = ["binstart"] }
 embedded-svc = "0.15.4"
 esp-idf-svc = "0.34.1"
 esp-idf-hal = "0.29.3"
-embedded-hal = "0.2"
+esp32-hal = "0.3.0"
+stepper = "0.5.0"
+embedded-hal  = "=1.0.0-alpha.4"
+embedded-time  ="0.12.1"
+nb = "1.0.0"
 embedded-graphics = "0.7"
 display-interface = "0.4"
 display-interface-spi = "0.4"
@@ -66,8 +70,18 @@ st7789 = "0.6"
 ili9341 = { version = "0.5", git = "https://github.com/yuri91/ili9341-rs" }
 ssd1306 = "0.7"
 smol = "1.2"
+mutex-trait = "0.2.0"
+void = "1.0.2"
+fixed = "1.11.0"
+typenum = "1.14.0"
+panic-halt = "0.2.0"
+num-traits = "0.2.14"
+thiserror = "1.0.30"
+async-executor = "1.4.1"
 
-stepper = "0.5.0"
+[dependencies.embedded-hal-stable]
+version = "0.2.4"
+package = "embedded-hal"
 
 [build-dependencies]
 embuild = "0.26"
