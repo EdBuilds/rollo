@@ -45,6 +45,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "arrayvec"
+version = "0.7.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8da52d66c7071e2e3fa2a1e5c6d088fec47b593032b254f5e980de8ea54454d6"
+
+[[package]]
 name = "async-channel"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1442,8 +1448,9 @@ checksum = "8d31d11c69a6b52a174b42bdc0c30e5e11670f90788b2c471c31c1d17d449443"
 
 [[package]]
 name = "polling"
-version = "2.1.0"
-source = "git+https://github.com/esp-rs-compat/polling#260dded77cdac2ebd0f4636e60b77c9392e73314"
+version = "2.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "685404d509889fade3e86fe3a5803bca2ec09b0c0778d5ada6ec8bf7a8de5259"
 dependencies = [
  "cfg-if",
  "libc",
@@ -1674,7 +1681,7 @@ dependencies = [
 name = "rollo"
 version = "0.1.0"
 dependencies = [
- "anyhow",
+ "arrayvec",
  "async-executor",
  "display-interface",
  "display-interface-spi",
@@ -1695,6 +1702,9 @@ dependencies = [
  "nb 1.0.0",
  "num-traits",
  "panic-halt",
+ "serde",
+ "serde_json",
+ "smallbox",
  "smol",
  "ssd1306",
  "st7789",
@@ -1704,6 +1714,14 @@ dependencies = [
  "url",
  "void",
 ]
+
+[[package]]
+name = "rollo_esp32_board"
+version = "0.1.0"
+
+[[package]]
+name = "rollo_host_mock_board"
+version = "0.1.0"
 
 [[package]]
 name = "rustc-demangle"
@@ -1845,6 +1863,12 @@ name = "slab"
 version = "0.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9def91fd1e018fe007022791f865d0ccc9b3a0d5001e01aabb8b40e46000afb5"
+
+[[package]]
+name = "smallbox"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4679d6eef28b85020158619fc09769de89e90886c5de7157587d87cb72648faa"
 
 [[package]]
 name = "smol"
@@ -2380,3 +2404,8 @@ name = "zero"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f1bc8a6b2005884962297587045002d8cfb8dcec9db332f4ca216ddc5de82c5"
+
+[[patch.unused]]
+name = "polling"
+version = "2.1.0"
+source = "git+https://github.com/esp-rs-compat/polling#260dded77cdac2ebd0f4636e60b77c9392e73314"

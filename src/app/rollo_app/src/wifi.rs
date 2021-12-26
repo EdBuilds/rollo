@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use anyhow::bail;
 use embedded_svc::ipv4;
 use embedded_svc::ping::Ping;
 use embedded_svc::wifi::{AccessPointConfiguration, ApIpStatus, ApStatus, ClientConfiguration, ClientConnectionStatus, ClientIpStatus, ClientStatus, Configuration, Status, Wifi};
@@ -33,7 +32,7 @@ pub enum Error {
 }
 
 #[allow(dead_code)]
-fn connect_wifi(wifi_res: &mut WifiResource
+pub fn connect_wifi(wifi_res: &mut WifiResource
 ) -> Result<(), Error> {
 
     info!("Wifi created, about to scan");
