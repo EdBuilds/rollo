@@ -1,20 +1,21 @@
 [package]
-name = "rollo_host_mock_board"
+name = "bal"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+experimental = ["trait_alias"]
 
 [dependencies]
 embedded-svc = "0.15.4"
-void = "1.0.2"
 stepper = "0.5.0"
-bal = { path = "../../bal" }
 fixed = "1.11.0"
-num-traits = "0.2.14"
+void = "1.0.2"
 thiserror = "1.0.30"
-enumset = "1.0.8"
 
 [dependencies.embedded-hal-stable]
 version = "0.2.4"
 package = "embedded-hal"
+features = ["unproven"]
+
+[features]

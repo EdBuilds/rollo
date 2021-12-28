@@ -9,15 +9,14 @@ use std::io;
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::Context;
+use bal::stepper::StepperResource;
+use bal::switch::SwitchResource;
 
 use thiserror::Error;
-use embedded_hal_stable::digital::v2::InputPin;
-use stepper::MoveToFuture;
-use stepper::util::ref_mut::RefMut;
 use void::Void;
+use bal::stepper::MCDelay;
 
 //remove
-use crate::{AxisResource, InputPinResource, MCDelay, StepperResource};
 
 #[derive(Error, Debug)]
 pub enum Error {
@@ -32,17 +31,17 @@ pub enum Error {
 }
 
 
-pub struct Axis {
-    stepper: Mutex<Box<dyn stepper::traits::MotionControl<Velocity = MCDelay, Error = stepper::motion_control::Error<(), (), Void, Infallible, Infallible>>>>,
-    limit_switch: InputPinResource,
+pub struct Axis<'a> {
+    stepper: &'a mut dyn StepperResource,
+    limit_switch: &'a mut dyn SwitchResource,
     range: i32,
     velocity: MCDelay,
 }
 
-impl Axis
+impl<'a> Axis<'a>
 {
-    pub fn new(axis_res:AxisResource, range: i32, velocity: MCDelay) -> Axis{
-        Axis { stepper: Mutex::new(use_stepper!(axis_res.stepper_res, |stepper| {Box::new(stepper.release())})), limit_switch: axis_res.limit_sw_pin, range, velocity}
+    pub fn new(stepper: &'a mut dyn StepperResource, switch: &'a mut dyn SwitchResource, range: i32, velocity: MCDelay) -> Axis<'a>{
+        Axis { stepper, limit_switch: switch, range, velocity}
     }
     pub fn home(&mut self, home_step: i32, homing_speed: MCDelay) -> impl Future<Output = Result<(), Error>>+ '_ {
             HomeFuture::new(self, homing_speed, home_step)
@@ -55,9 +54,9 @@ enum HomingState {
     Returning,
 }
 struct HomeFuture<'a>{
-    motion_control: &'a Mutex<Box<dyn stepper::traits::MotionControl<Velocity = MCDelay, Error = stepper::motion_control::Error<(), (), Void, Infallible, Infallible>>>>,
+    motion_control: &'a mut dyn StepperResource,
     range: Option<i32>,
-    limit_switch: &'a InputPinResource,
+    limit_switch: &'a mut dyn SwitchResource,
     state: HomingState,
     homing_speed: MCDelay,
     home_step: i32,
@@ -65,7 +64,7 @@ struct HomeFuture<'a>{
 }
 impl HomeFuture<'_>
 {
-    fn new(axis: &mut Axis, homing_speed: MCDelay, home_step:i32) -> HomeFuture
+    fn new<'a>(axis: &'a mut Axis, homing_speed: MCDelay, home_step:i32) -> HomeFuture<'a>
     {
         HomeFuture{ motion_control: axis.stepper.borrow_mut(), range: Some(axis.range), limit_switch: axis.limit_switch.borrow_mut(), state: HomingState::Start, homing_speed , velocity: Some(axis.velocity), home_step}
     }
@@ -78,20 +77,20 @@ impl Future for HomeFuture<'_> {
         match state {
             HomingState::Start => {
                 let range = self.range.unwrap();
-                (*self.motion_control).lock().unwrap().move_to_position(speed, -range).map_err(|_|Error::MotionControl)?;
+                (*self.motion_control).move_to_position(speed, -range).map_err(|_|Error::MotionControl)?;
                     self.state = HomingState::Homing;
                 cx.waker().wake_by_ref();
                 Poll::Pending
 
             }
             HomingState::Homing => {
-                if (*self.motion_control).lock().unwrap().update().map_err(|_|Error::Driver)?{
-                        if let Ok(homed) = use_input_pin!(self.limit_switch ,|input_pin|{input_pin.is_low()}){
+                if (*self.motion_control).update().map_err(|_|Error::Driver)?{
+                        if let Ok(homed) = self.limit_switch.is_low(){
                             if homed{
                                 let home_step = self.home_step;
 
-                                (*self.motion_control).lock().unwrap().reset_position(-home_step).map_err(|_|Error::MotionControl)?;
-                                (*self.motion_control).lock().unwrap().move_to_position(speed, 0).map_err(|_|Error::MotionControl)?;
+                                (*self.motion_control).reset_position(-home_step).map_err(|_|Error::MotionControl)?;
+                                (*self.motion_control).move_to_position(speed, 0).map_err(|_|Error::MotionControl)?;
                                 self.state = HomingState::Returning;
                             }
                                 cx.waker().wake_by_ref();
@@ -106,7 +105,7 @@ impl Future for HomeFuture<'_> {
                     }
             HomingState::Returning => {
 
-                if (*self.motion_control).lock().unwrap().update().map_err(|_|Error::Driver)?{
+                if (*self.motion_control).update().map_err(|_|Error::Driver)?{
                     cx.waker().wake_by_ref();
                     Poll::Pending
                 } else {

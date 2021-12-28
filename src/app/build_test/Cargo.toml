@@ -1,0 +1,18 @@
+[package]
+name = "build_test"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+bal = { path = "../../lib/bal" }
+
+[dependencies.board_support]
+path = "../../lib/board_support"
+
+[[bin]]
+name = "build_test"
+path = "src/main.rs"
+test = false
+bench = false

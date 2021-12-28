@@ -9,27 +9,17 @@ use embedded_svc::ping::Ping;
 use embedded_svc::utils::anyerror::*;
 use embedded_svc::wifi::*;
 
-use esp_idf_svc::eth::*;
-use esp_idf_svc::httpd::ServerRegistry;
-use esp_idf_svc::netif::*;
-use esp_idf_svc::nvs::*;
-use esp_idf_svc::ping;
-use esp_idf_svc::sntp;
-use esp_idf_svc::sysloop::*;
-use esp_idf_svc::wifi::*;
-
-
-use esp_idf_svc::httpd as idf;
 use thiserror::Error;
+use bal::server::ServerResource;
 
 use crate::web_protocol::{Command, CommandBuffer, parse_request};
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("Couldn't Register endpoint")]
-    RegisterEndpoint(embedded_svc::httpd::Error),
-    #[error("Couldn't start server")]
-    ServerStart,
+    #[error("Couldn't register endpoint")]
+    RegisterEndpoint,
+    #[error("Couldn't start web server: {0}")]
+    ServerCreation(bal::server::Error),
     #[error("Resource busy")]
     ResourceBusy,
     #[error("Can't push command to the buffer")]
@@ -37,21 +27,21 @@ pub enum Error {
 
 }
 
-pub fn create_server(command_buffer: CommandBuffer) -> Result<idf::Server, Error>{
-    let server = idf::ServerRegistry::new()
+pub fn create_server(server_res: & mut dyn ServerResource, command_buffer: CommandBuffer) -> Result<(), Error>{
+    let registry = embedded_svc::httpd::registry::MiddlewareRegistry::new()
         .at("/")
-        .get(|_| Ok("Eddig is siman meg tudtam volna!".into())).map_err(|e|Error::RegisterEndpoint(e))?
+        .get(|_| Ok("Eddig is siman meg tudtam volna!".into())).map_err(|_|Error::RegisterEndpoint)?
         .at("/command")
-        .put(move |rq| {handle_command(rq,command_buffer.clone()).into()}).map_err(|e|Error::RegisterEndpoint(e))?
+        .put(move |rq| {handle_command(rq,command_buffer.clone()).into()}).map_err(|_|Error::RegisterEndpoint)?
         .at("/bar")
         .get(|_| {
             Response::new(403)
                 .status_message("No permissions")
                 .body("You have no permissions to access this page".into())
                 .into()
-        }).map_err(|e|Error::RegisterEndpoint(e))?;
+        }).map_err(|_|Error::RegisterEndpoint)?;
+    Ok(server_res.create_server(registry).map_err(|e|Error::ServerCreation(e))?)
 
-    Ok(server.start(&Default::default()).map_err(|_|Error::ServerStart)?)
 }
 fn push_command(command: Command, command_buffer: CommandBuffer) ->Result<(), Error>{
     Ok(command_buffer.lock().map_err(|_|Error::ResourceBusy)?.try_push(command).map_err(|_| Error::BufferFull)?)
