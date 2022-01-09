@@ -9,9 +9,9 @@ edition = "2021"
 embedded-svc = "0.15.4"
 thiserror = "1.0.30"
 bal = { path = "../bal" }
+rollo_host_mock_board = { path = "../../lib/bsps/rollo_host_mock_board" , optional = true}
+rollo_esp32_board = { path = "../../lib/bsps/rollo_esp32_board" , optional = true}
 
 [target.x86_64-unknown-linux-gnu.dependencies]
-rollo_host_mock_board = { path = "../../lib/bsps/rollo_host_mock_board" , optional = true}
 
 [target.xtensa-esp32-espidf.dependencies]
-rollo_esp32_board = { path = "../../lib/bsps/rollo_esp32_board" , optional = true}

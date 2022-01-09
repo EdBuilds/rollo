@@ -7,9 +7,18 @@ edition = "2021"
 
 [dependencies]
 bal = { path = "../../lib/bal" }
+smol = { path = "../../../../esp32/smol" }
+
+[target.xtensa-esp32-espidf.dependencies]
+esp-idf-sys = { version = "0.28.1", features = ["binstart"] }
+panic-halt = "0.2.0"
+
+[build-dependencies]
+embuild = "0.26"
 
 [dependencies.board_support]
 path = "../../lib/board_support"
+features = ["rollo_host_mock_board"]
 
 [[bin]]
 name = "build_test"

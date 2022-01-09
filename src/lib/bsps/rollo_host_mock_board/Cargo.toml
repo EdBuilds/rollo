@@ -14,6 +14,13 @@ fixed = "1.11.0"
 num-traits = "0.2.14"
 thiserror = "1.0.30"
 enumset = "1.0.8"
+tide = "0.16.0"
+async-std = "1.10.0"
+http-types = "2.12.0"
+async-trait = "0.1.52"
+futures = "0.3.19"
+log = "0.4.14"
+reqwest = {version = "0.11.8", features= ["blocking"]}
 
 [dependencies.embedded-hal-stable]
 version = "0.2.4"

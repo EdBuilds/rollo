@@ -1,25 +1,41 @@
 use std::borrow::{Borrow, BorrowMut};
 use std::io::Read;
-use std::sync::{Arc, Mutex};
-use arrayvec::ArrayVec;
+use std::sync::{Arc};
 use serde::{Deserialize, Serialize};
+use std::sync::Mutex;
 
 use embedded_svc::httpd::*;
+use log::{info, warn};
+use queue::Queue;
 use thiserror::Error;
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct Target {
-    velocity: f32,
-    position: f32,
+    pub speed: f32,
+    pub position: f32,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub struct MoveCommand {
-    opening: Target,
-    angle: Target,
+    pub lateral: Target,
+    pub angle: Target,
 }
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Clone)]
 pub enum Command {
+    Scheduler(SchedulerCommand),
+    Controller(ControllerCommand),
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub enum ControllerCommand {
     Move(MoveCommand),
+    Open,
+    Close,
     Home,
+}
+
+#[derive(Serialize, Deserialize, Clone)]
+pub enum SchedulerCommand {
+    Start,
+    Stop,
 }
 
 #[derive(Error, Debug)]
@@ -34,14 +50,23 @@ pub enum Error {
     MotionControl,
 
 }
-pub type CommandBuffer = Arc<Mutex<ArrayVec<Command,2>>>;
 
-pub fn parse_request(mut rq:Request) -> Result<Command, Error>{
-    let comm:Command = Command::Move(MoveCommand{ opening: Target { velocity: 0.0, position: 0.0 }, angle: Target { velocity: 0.0, position: 0.0 } });
-    let homecom = Command::Home;
-    println!("{:#?}",serde_json::to_string(homecom.borrow()));
-    let mut buffer = String::new();
-    rq.read_to_string(buffer.borrow_mut()).map_err(|_|Error::RequestParsing)?;
-    let parsed_command: Command = serde_json::from_str(&*buffer).map_err(|_| Error::Deserialize)?;
-    Ok(parsed_command)
+
+pub fn parse_request(rq: String) -> Result<Command, Error>{
+    let parse_result = serde_json::from_str(rq.as_str()).map_err(|_| Error::Deserialize);
+    if let Err(error) = parse_result.borrow(){
+        println!("Could not serialize incoming data: {:#?}", error);
+        println!("Possible json variations: {:#?}", [serde_json::ser::to_string(Command::Controller(ControllerCommand::Home).borrow())]);
+    }
+    parse_result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_move_serialize() {
+        println!("{:#?}",serde_json::ser::to_string(Command::Controller(ControllerCommand::Move(MoveCommand{ lateral: Target { speed: 10.0, position: 10.0 }, angle: Target { speed: 10.0, position: 0.0 } })).borrow()));
+    }
 }

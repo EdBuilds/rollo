@@ -1,10 +1,13 @@
 #[macro_use]
 pub mod ping;
 pub mod server;
+pub mod client;
+
 use esp_idf_sys;
 use std::borrow::BorrowMut;
 use std::convert::Infallible;
 use std::fmt::Error;
+use std::io::Read;
 use std::marker::PhantomData;
 use std::ops::{DerefMut, Mul, Sub};
 use std::sync::Arc;
@@ -13,7 +16,7 @@ use esp_idf_sys::EspMutex;
 use stepper::drivers::drv8825;
 use stepper::drivers::drv8825::DRV8825;
 use stepper::traits::{EnableDirectionControl, EnableStepControl};
-use embedded_hal_stable::digital::v2::OutputPin;
+use embedded_hal_stable::digital::v2::{InputPin, OutputPin};
 use embedded_hal_stable::timer::CountDown;
 use embedded_svc::wifi::{AccessPointInfo, Capability, Configuration, Status};
 use embedded_time::duration::Microseconds;
@@ -42,11 +45,13 @@ use void::Void;
 use bal::stepper::{HasStepper, MCDelay, StepperResource};
 use bal::switch::SwitchResource;
 use bal::wifi::{HasWifi, WifiResource};
-use bal::server::ServerResource;
+use bal::server::{Handler, ServerResource};
+use bal::Takeable;
 use fixed::prelude::*;
 use num_traits::cast::ToPrimitive;
 use enumset;
 use enumset::EnumSet;
+use esp_idf_svc::http::client::EspHttpClient;
 
 pub struct DelayToTicks;
 impl motion_control::DelayToTicks<MCDelay> for DelayToTicks {
@@ -57,7 +62,6 @@ impl motion_control::DelayToTicks<MCDelay> for DelayToTicks {
     fn delay_to_ticks(&self, delay: MCDelay)
                       -> Result<Self::Ticks, Self::Error>
     {
-        println!("Delay converted:{:#?} ->{:#?}", delay,delay *(1000000000));
         Ok(NanosecWrapper::from((delay *(1000000000)).to_i64().unwrap()))
     }
 }
@@ -79,18 +83,32 @@ macro_rules! polymorphic_enum {
 
 polymorphic_enum! {
     WifiContainer use_wifi,
-    Wifi0(WifiWrapper),
+    Wifi0(EspWifi),
 }
 polymorphic_enum! {
     ServerContainer use_server,
     Server0(EspWebServer),
 }
-polymorphic_enum! {
-    InputPinContainer use_input_pin,
-    Gpio17InPD(Gpio17<Input<PullDown>>),
-    Gpio18InPD(Gpio18<Input<PullDown>>),
-}
 
+impl bal::server::ServerResource for ServerContainer {
+    fn create_server(&mut self, handlers: Vec<Handler>) -> Result<(), bal::server::Error> {
+       use_server!(self, |server| {server.create_server(handlers)})
+    }
+}
+polymorphic_enum! {
+    SwitchContainer use_switch,
+    Gpio17InPD(Gpio21<Input<PullDown>>),
+    Gpio18InPD(Gpio22<Input<PullDown>>),
+}
+impl bal::switch::SwitchResource for SwitchContainer {
+    fn is_low(&mut self) -> Result<bool, Infallible> {
+        use_switch!(self, |sw|{sw.is_low()})
+    }
+
+    fn is_high(&mut self) -> Result<bool, Infallible> {
+        use_switch!(self, |sw|{sw.is_high()})
+    }
+}
 polymorphic_enum! {
     TimerContainer use_timer,
     TimerG00(TimerWrapper<Timer<TIMG0, Timer0>>),
@@ -99,14 +117,30 @@ polymorphic_enum! {
 
 polymorphic_enum! {
     StepperContainer use_stepper,
-    stepper1(SoftwareMotionControl<DRV8825<(), (), (), (), (), (), (), OutputWrapper<Gpio2<Output<PushPull>>>, OutputWrapper<Gpio5<Output<PushPull>>>>, TimerWrapper<Timer<TIMG0, Timer0>>, Trapezoidal<MCDelay>, DelayToTicks>),
+    stepper1(SoftwareMotionControl<DRV8825<(), (), (), OutputWrapper<Gpio13<Output<PushPull>>>, OutputWrapper<Gpio16<Output<PushPull>>>, OutputWrapper<Gpio17<Output<PushPull>>>, OutputWrapper<Gpio18<Output<PushPull>>>, OutputWrapper<Gpio2<Output<PushPull>>>, OutputWrapper<Gpio5<Output<PushPull>>>>, TimerWrapper<Timer<TIMG0, Timer0>>, Trapezoidal<MCDelay>, DelayToTicks>),
     stepper2(SoftwareMotionControl<DRV8825<(), (), (), (), (), (), (), OutputWrapper<Gpio4<Output<PushPull>>>, OutputWrapper<Gpio15<Output<PushPull>>>>, TimerWrapper<Timer<TIMG0, Timer1>>, Trapezoidal<MCDelay>, DelayToTicks>),
+}
+impl stepper::traits::MotionControl for StepperContainer {
+    type Velocity = MCDelay;
+    type Error = stepper::motion_control::Error<(), (), Void, Infallible, Infallible>;
+
+    fn move_to_position(&mut self, max_velocity: Self::Velocity, target_step: i32) -> Result<(), Self::Error> {
+        use_stepper!{self, |stp|{stp.move_to_position(max_velocity, target_step)}}
+    }
+
+    fn reset_position(&mut self, step: i32) -> Result<(), Self::Error> {
+        use_stepper!{self, |stp|{stp.reset_position(step)}}
+    }
+
+    fn update(&mut self) -> Result<bool, Self::Error> {
+        use_stepper!{self, |stp|{stp.update()}}
+    }
 }
 impl embedded_svc::wifi::Wifi for WifiContainer {
     type Error = bal::wifi::Error;
 
     fn get_capabilities(&self) -> Result<EnumSet<Capability>, Self::Error> {
-        use_wifi!(&self, |s| {s.get_capabilities()})
+        use_wifi!(&self, |s| {s.get_capabilities().map_err(|_| bal::wifi::Error::Undefined)})
     }
 
     fn get_status(&self) -> Status {
@@ -114,25 +148,26 @@ impl embedded_svc::wifi::Wifi for WifiContainer {
     }
 
     fn scan(&mut self) -> Result<Vec<AccessPointInfo>, Self::Error> {
-        use_wifi!(self, |s| {s.scan()})
+        println!("11");
+        use_wifi!(self, |s| {s.scan().map_err(|_| bal::wifi::Error::Undefined)})
     }
 
     fn get_configuration(&self) -> Result<Configuration, Self::Error> {
-        use_wifi!(&self, |s| {s.get_configuration()})
+        use_wifi!(&self, |s| {s.get_configuration().map_err(|_| bal::wifi::Error::Undefined)})
     }
 
     fn set_configuration(&mut self, conf: &Configuration) -> Result<(), Self::Error> {
-        use_wifi!(self, |s| {s.set_configuration(conf)})
+        use_wifi!(self, |s| {s.set_configuration(conf).map_err(|_| bal::wifi::Error::Undefined)})
     }
 }
 
-pub struct BoardResources {
-    pub stepper_a: StepperContainer,
-    pub stepper_b: StepperContainer,
-    pub limit_sw_a: InputPinContainer,
-    pub limit_sw_b: InputPinContainer,
-    pub wifi: WifiContainer,
-    pub server: ServerContainer,
+pub struct ClientContainer();
+pub struct BoardResources{
+    pub steppers: [Option<StepperContainer>;2],
+    pub switches: [Option<SwitchContainer>;2],
+    pub wifis:    [Option<WifiContainer>;1],
+    pub servers:  [Option<ServerContainer>;1],
+    pub clients:  [Option<ClientContainer>;1],
 }
 
 pub struct BoardResourceBuilder {
@@ -166,30 +201,6 @@ impl<T: embedded_hal_stable::timer::CountDown> TimerWrapper<T> {
         TimerWrapper{timer}
     }
 }
-pub struct WifiWrapper(EspWifi);
-impl embedded_svc::wifi::Wifi for WifiWrapper {
-    type Error = bal::wifi::Error;
-
-    fn get_capabilities(&self) -> Result<enumset::EnumSet<Capability>, Self::Error> {
-        self.get_capabilities().map_err(|e|Self::Error::Undefined)
-    }
-
-    fn get_status(&self) -> Status {
-        self.get_status()
-    }
-
-    fn scan(&mut self) -> Result<Vec<AccessPointInfo>, Self::Error> {
-        self.scan().map_err(|e|Self::Error::Undefined)
-    }
-
-    fn get_configuration(&self) -> Result<Configuration, Self::Error> {
-        self.get_configuration().map_err(|e|Self::Error::Undefined)
-    }
-
-    fn set_configuration(&mut self, conf: &Configuration) -> Result<(), Self::Error> {
-        self.set_configuration(conf).map_err(|e|Self::Error::Undefined)
-    }
-}
 pub struct NanosecWrapper { ns: i64}
 impl From<Nanoseconds> for NanosecWrapper{
     fn from(nans: Nanoseconds) -> Self {
@@ -217,7 +228,6 @@ impl<T: embedded_hal_stable::timer::CountDown> embedded_hal::timer::CountDown fo
 
     fn try_start<G>(&mut self, count: G) -> Result<(), Self::Error> where G: Into<Self::Time>  {
         let ns = count.into().ns;
-        println!("Delay ns:{}", ns);
         Ok(self.timer.start(ns as u64))
     }
 
@@ -228,22 +238,31 @@ impl<T: embedded_hal_stable::timer::CountDown> embedded_hal::timer::CountDown fo
 
 
 static mut BOARD_RESOURCE_BUILDER_TAKEN:EspMutex<bool> = EspMutex::new(false);
-impl<'a> BoardResourceBuilder{
+impl BoardResourceBuilder{
     pub fn resolve(target_accel: MCDelay) -> Option<BoardResources> {
+        esp_idf_svc::log::EspLogger::initialize_default();
         unsafe {
             BOARD_RESOURCE_BUILDER_TAKEN.lock(|taken| {
                 if *taken {
                     Option::None
                 } else {
                     *taken = true;
+
+                    println!("taking peripherals");
                     let pr = Peripherals::take().unwrap();
                     let gpio = pr.GPIO.split();
                     let stp1_step = OutputWrapper::new(gpio.gpio2.into_push_pull_output());
                     let stp1_dir = OutputWrapper::new(gpio.gpio5.into_push_pull_output());
+                    println!("allocating new pins");
+                    let stp1_reset = OutputWrapper::new(gpio.gpio13.into_push_pull_output());
+                    let stp1_m0 = OutputWrapper::new(gpio.gpio16.into_push_pull_output());
+                    let stp1_m1 = OutputWrapper::new(gpio.gpio17.into_push_pull_output());
+                    let stp1_m2 = OutputWrapper::new(gpio.gpio18.into_push_pull_output());
                     let stp2_step = OutputWrapper::new(gpio.gpio4.into_push_pull_output());
                     let stp2_dir = OutputWrapper::new(gpio.gpio15.into_push_pull_output());
-                    let stp1_lim = gpio.gpio17.into_pull_down_input();
-                    let stp2_lim = gpio.gpio18.into_pull_down_input();
+                    let stp1_lim = gpio.gpio21.into_pull_down_input();
+                    let stp2_lim = gpio.gpio22.into_pull_down_input();
+                    println!("Pins allocated");
                     let (_, dport_clock_control) = pr.DPORT.split();
 
                     let clkcntrl = esp32_hal::clock_control::ClockControl::new(
@@ -271,9 +290,10 @@ impl<'a> BoardResourceBuilder{
                     let profile_1 = ramp_maker::Trapezoidal::new(target_accel);
                     let profile_2 = ramp_maker::Trapezoidal::new(target_accel);
                     let step_driver_1 = Stepper::from_driver(DRV8825::new())
-                        .enable_direction_control(stp1_dir, Direction::Forward, &mut wrapped_timer_0)
+                        .enable_direction_control(stp1_dir, Direction::Forward, wrapped_timer_0.borrow_mut())
                         .unwrap()
                         .enable_step_control(stp1_step)
+                        .enable_step_mode_control((stp1_reset, stp1_m0, stp1_m1, stp1_m2), stepper::step_mode::StepMode32::M32, wrapped_timer_0.borrow_mut()).unwrap()
                         .enable_motion_control((wrapped_timer_0, profile_1, DelayToTicks));
 
                     let step_driver_2 = Stepper::from_driver(DRV8825::new())
@@ -281,21 +301,29 @@ impl<'a> BoardResourceBuilder{
                         .unwrap()
                         .enable_step_control(stp2_step)
                         .enable_motion_control((wrapped_timer_1, profile_2, DelayToTicks));
-                    let wifi1 = EspWifi::new(Arc::new(EspNetifStack::new().unwrap()), Arc::new(EspSysLoopStack::new().unwrap()), Arc::new(EspDefaultNvs::new().unwrap())).unwrap();
-                    let mut wrapper = WifiWrapper(wifi1);
+                    let mut wifi1 = EspWifi::new(Arc::new(EspNetifStack::new().unwrap()), Arc::new(EspSysLoopStack::new().unwrap()), Arc::new(EspDefaultNvs::new().unwrap())).unwrap();
                     Some(BoardResources {
-                        stepper_a:StepperContainer::stepper1(step_driver_1.release()),
-                        limit_sw_a: InputPinContainer::Gpio17InPD(stp1_lim),
-                        stepper_b: StepperContainer::stepper2(step_driver_2.release()),
-                        limit_sw_b: InputPinContainer::Gpio18InPD(stp2_lim),
-                        wifi: WifiContainer::Wifi0(wrapper),
-                        server: ServerContainer::Server0(EspWebServer::new())
+                        steppers: [Some(StepperContainer::stepper1(step_driver_1.release())),
+                        Some(StepperContainer::stepper2(step_driver_2.release()))],
+                        switches: [Some(SwitchContainer::Gpio17InPD(stp1_lim)),Some(SwitchContainer::Gpio18InPD(stp2_lim))],
+                        wifis: [Some(WifiContainer::Wifi0(wifi1))],
+                        servers: [Some(ServerContainer::Server0(EspWebServer::new()))],
+                        clients: [Some(ClientContainer{})]
                     })
                 }
             })
         }
     }
 }
+
+impl HasStepper for BoardResources
+{
+    type Resource = StepperContainer;
+    fn take_stepper(&mut self, id: usize) -> Option<Self::Resource> {
+        self.steppers.get_mut(id)?.take()
+    }
+}
+
 //impl<'a> HasWifi for BoardResources {
 //    type Error = EspError;
 //

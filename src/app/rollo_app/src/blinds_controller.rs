@@ -1,59 +1,139 @@
 #[macro_use]
 use std::borrow::BorrowMut;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc};
 use arrayvec::ArrayVec;
 use thiserror::Error;
-use crate::{Axis};
+use crate::{Axis, network};
 use bal::stepper::MCDelay;
 use bal::stepper::StepperResource;
 use bal::wifi::{HasWifi, WifiResource};
-use crate::web_protocol::Command;
-use crate::web_server::create_server;
-use crate::web_server;
+use crate::web_protocol::{Command, ControllerCommand, MoveCommand};
 use core::option::Option;
 use std::marker::PhantomData;
+use std::ops::Deref;
+use log::{debug, error, info, warn};
 use bal::server::ServerResource;
 use board_support::*;
 use board_support::wifi::*;
+use queue;
+use queue::Queue;
+use crate::user_settings::{BlindsUserSettings, UserSettings};
+use crate::axis;
+use std::time::Duration;
+use std::sync::Mutex;
+use std::thread;
+use bal::stepper::HasStepper;
+use crate::network::ThreadSignal;
+
 
 #[derive(Error, Debug)]
 pub enum Error {
-    #[error("Couldn't connect to wifi")]
-    WifiConnection,
-    #[error("Couldn't create web server: {0}")]
-    ServerCreation(web_server::Error),
+    #[error("Couldn't set the thread id for the comms channel:{0}")]
+    ThreadSet(network::Error),
+    #[error("Couldn't move to the desired location: {0}")]
+    MovementError(axis::Error),
+    #[error("Couldn't home axis: {0}")]
+    HomingError(axis::Error),
 
 }
-
-pub struct BlindsController <'a>{
-    commands_buffer: Arc<Mutex<ArrayVec<Command,2>>>,
-    _phantom_data: PhantomData<&'a u32>,
-    axis_angle: Axis<'a>,
-    axis_opening: Axis<'a>,
-    wifi_res: &'a mut dyn WifiResource,
-    server: &'a mut dyn ServerResource,
+pub struct BlindsController
+{
+    thread_signal: ThreadSignal<ControllerCommand>,
+    axis_angle: Axis,
+    axis_lateral: Axis,
+    settings: BlindsUserSettings,
 }
-impl<'a> BlindsController<'a>{
-    pub fn new(board_res: &'a mut BoardResources) -> BlindsController<'a>{
+impl BlindsController
+{
+    pub fn new(board_res: &mut BoardResources, settings: UserSettings, thread_signal: ThreadSignal<ControllerCommand>) -> BlindsController{
         BlindsController{
-            commands_buffer: Arc::new(Mutex::new(ArrayVec::new())),
-            axis_angle: Axis::new(use_stepper!(&mut board_res.stepper_a,|stp|{stp.borrow_mut()}),
-                                  use_input_pin!(&mut board_res.limit_sw_a,|sw|{sw.borrow_mut()}),
-                                  1000,
-                                  MCDelay::from_num(0.01)),
-            axis_opening: Axis::new(use_stepper!(&mut board_res.stepper_b,|stp|{stp.borrow_mut()}),
-                                  use_input_pin!(&mut board_res.limit_sw_b,|sw|{sw.borrow_mut()}),
-                                  1000,
-                                  MCDelay::from_num(0.01)),
-            wifi_res: &mut board_res.wifi,
-            server: use_server!(&mut board_res.server, |server|{server.borrow_mut()}),
-            _phantom_data: Default::default(),
+            thread_signal,
+            axis_angle: Axis::new(board_res.steppers.get_mut(0).unwrap().take().unwrap(),
+                                  board_res.switches.get_mut(0).unwrap().take().unwrap(),
+                                    settings.axis_angle_settings
+            ),
+            axis_lateral: Axis::new(board_res.steppers.get_mut(1).unwrap().take().unwrap(),
+                                    board_res.switches.get_mut(1).unwrap().take().unwrap(),
+                                    settings.axis_open_settings
+            ),
+            settings: settings.blinds_settings
         }
     }
-    pub fn start(&mut self) -> Result<(), Error>{
-        connect_wifi(self.wifi_res.borrow_mut()).map_err(|_|Error::WifiConnection)?;
-        create_server(self.server.borrow_mut(), self.commands_buffer.clone()).map_err(|e|Error::ServerCreation(e))?;
+    fn move_lateral(&mut self, step: i32, speed: f32)->Result<(), Error> {
+
+        self.axis_angle.move_to(self.settings.angle_open, speed).map_err(|e|Error::MovementError(e))?;
+        self.axis_lateral.move_to(step, speed).map_err(|e|Error::MovementError(e))
+
+    }
+    fn process_move_command(&mut self, move_command:MoveCommand)->Result<(), Error> {
+        self.move_lateral(move_command.lateral.position as i32, move_command.lateral.speed)?;
+        self.axis_angle.move_to(move_command.angle.position as i32, move_command.lateral.speed).map_err(|e|Error::MovementError(e))
+
+    }
+    fn process_home_command(&mut self)->Result<(), Error> {
+
+        self.axis_angle.home().map_err(|e|Error::HomingError(e))?;
+        self.axis_lateral.home().map_err(|e|Error::HomingError(e))
+
+    }
+    fn command_executer(&mut self) {
+        loop {
+            thread::park();
+            println!("thread woken");
+            match self.thread_signal.pop_item() {
+                Ok(command) => {
+                match command {
+                    ControllerCommand::Move(move_command) => {
+                        info!("Executing move command...");
+                        match self.process_move_command(move_command) {
+                            Ok(_) => {
+                            info!("Done!");}
+                            Err(error) => {
+                                warn!("Error during Execution of move command: {}", error);
+                            }
+                        }
+                    }
+                    ControllerCommand::Home => {
+                        info!("Executing home command...");
+                        match self.process_home_command() {
+                            Ok(_) => {
+                                info!("Done!");}
+                            Err(error) => {
+                                warn!("Error during Execution of home command: {}", error);
+                            }
+                        }
+                    }
+                    ControllerCommand::Open => {
+                        info!("Opening Blinds!")
+                        // todo Actually implement this
+                    }
+                    ControllerCommand::Close => {
+                        info!("Closing Blinds!")
+                        // todo Actually implement this
+                    }
+                }
+                }
+                    Err(error) => {
+                        error!("Blinds controller coldn't get item from the queue:{}", error);
+                    }
+            }
+            }
+        }
+    fn setup(&mut self) -> Result<(), Error>{
+        self.thread_signal.set_thread().map_err(|e|Error::ThreadSet(e))?;
         Ok(())
+
+    }
+    pub fn start(&mut self) {
+        match self.setup() {
+            Ok(_) => {
+                println!("Command executer started");
+                self.command_executer();
+            }
+            Err(error) => {
+                println!("Could not start program, due to : {:#?}", error);
+            }
+        }
 
     }
 }

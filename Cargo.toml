@@ -1,13 +1,14 @@
 [workspace]
 members = [
-    "src/app/*",
+    "src/app/rollo_app",
     "src/lib/board_support",
     "src/lib/bal",
+    "src/lib/bsps/*",
 ]
 # this lets you use `cargo fix`!
 
 [patch.crates-io]
-smol = { git = "https://github.com/esp-rs-compat/smol" }
+smol = { path = "../esp32/smol" }
 polling = { git = "https://github.com/esp-rs-compat/polling" }
 socket2 = { git = "https://github.com/esp-rs-compat/socket2" }
 getrandom = { version = "0.2", git = "https://github.com/esp-rs-compat/getrandom.git" }

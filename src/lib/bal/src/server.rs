@@ -1,5 +1,7 @@
 use embedded_svc::httpd::registry::Registry;
+use crate::networking_types::{Method, Response};
 use thiserror::Error;
+
 #[derive(Error, Debug)]
 pub enum Error {
     #[error("Could not register handler to server")]
@@ -9,9 +11,13 @@ pub enum Error {
     #[error("Could not start the server")]
     Start,
 }
-
+pub struct Handler {
+    pub method: Method,
+    pub uri: String,
+    pub handler: Box<dyn Fn(String) -> Response + Send>,
+}
 pub trait ServerResource {
-    fn create_server(&mut self, registry: embedded_svc::httpd::registry::MiddlewareRegistry) -> Result<(),Error>;
+    fn create_server(&mut self, handlers: Vec<Handler>) -> Result<(),Error>;
 }
 pub trait HasServer {
     type Server;

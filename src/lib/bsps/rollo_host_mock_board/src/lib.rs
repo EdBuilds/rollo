@@ -1,3 +1,6 @@
+mod server;
+mod client;
+
 #[macro_use]
 use std::convert::Infallible;
 use std::ops::Sub;
@@ -13,7 +16,29 @@ use embedded_svc::httpd::registry::MiddlewareRegistry;
 use embedded_svc::wifi::{AccessPointInfo, ApStatus, Capability, ClientStatus, Configuration, Status};
 use enumset::EnumSet;
 use void::Void;
+use log::{Record, Level, Metadata, LevelFilter};
+use std::io;
 
+pub use server::*;
+
+struct SimpleLogger;
+
+pub struct ServerContainer;
+
+impl log::Log for SimpleLogger {
+    fn enabled(&self, metadata: &Metadata) -> bool {
+        metadata.level() <= Level::Debug
+    }
+
+    fn log(&self, record: &Record) {
+        if self.enabled(record.metadata()) {
+            println!("{} - {}", record.level(), record.args());
+        }
+    }
+
+    fn flush(&self) {}
+}
+static LOGGER: SimpleLogger = SimpleLogger;
 pub struct DelayToTicks;
 impl motion_control::DelayToTicks<MCDelay> for DelayToTicks {
     type Ticks = NanosecWrapper;
@@ -47,8 +72,10 @@ impl Sub for NanosecWrapper {
     }
 }
 
-pub struct MockStepper;
-impl stepper::traits::MotionControl for MockStepper {
+pub struct StepperContainer {
+    name: &'static str
+}
+impl stepper::traits::MotionControl for StepperContainer {
     type Velocity = MCDelay;
     type Error = stepper::motion_control::Error<(), (), Void, Infallible, Infallible>;
 
@@ -61,25 +88,57 @@ impl stepper::traits::MotionControl for MockStepper {
     }
 
     fn update(&mut self) -> Result<bool, Self::Error> {
-        Ok(true)
+        println!("update called for,{}. Enter bool(y/n):",self.name);
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).expect("Failed to read input");
+        match input.as_str().chars().nth(0).expect("no input given") {
+            'y' => {Ok(true)}
+            'n' => {Ok(false)}
+            _ => {
+                println!("Invalid parameter given, returning False");
+                Ok(false)
+            }
+        }
     }
 }
 
-pub struct MockSwitch;
-impl embedded_hal_stable::digital::v2::InputPin for MockSwitch {
-    type Error = Infallible;
+pub struct SwitchContainer {
+    name: &'static str
+}
+impl bal::switch::SwitchResource for SwitchContainer {
+    fn is_high(&mut self) -> Result<bool, Infallible> {
+        println!("Is High called for,{}. Enter bool(y/n):",self.name);
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).expect("Failed to read input");
+        match input.as_str().chars().nth(0).expect("no input given") {
+            'y' => {Ok(true)}
+            'n' => {Ok(false)}
+            _ => {
+                println!("Invalid parameter given, returning False");
+                Ok(false)
+            }
+        }
 
-    fn is_high(&self) -> Result<bool, Self::Error> {
-        Ok(true)
     }
 
-    fn is_low(&self) -> Result<bool, Self::Error> {
-        Ok(false)
+    fn is_low(&mut self) -> Result<bool, Infallible> {
+
+        println!("is_low called for,{}. Enter bool(y/n):",self.name);
+        let mut input = String::new();
+        io::stdin().read_line(&mut input).expect("Failed to read input");
+        match input.as_str().chars().nth(0).expect("no input given") {
+            'y' => {Ok(true)}
+            'n' => {Ok(false)}
+            _ => {
+                println!("Invalid parameter given, returning False");
+                Ok(false)
+            }
+        }
     }
 }
 
-pub struct MockWifi;
-impl embedded_svc::wifi::Wifi for MockWifi {
+pub struct WifiContainer;
+impl embedded_svc::wifi::Wifi for WifiContainer {
     type Error = bal::wifi::Error;
 
     fn get_capabilities(&self) -> Result<EnumSet<Capability>, Self::Error> {
@@ -102,91 +161,27 @@ impl embedded_svc::wifi::Wifi for MockWifi {
         Err(bal::wifi::Error::Undefined)
     }
 }
-
-pub struct MockServer;
-impl ServerResource for MockServer {
-    fn create_server(&mut self, registry: MiddlewareRegistry) -> Result<(), Error> {
-        Ok(())
-    }
-}
-pub struct BoardResources {
-    pub stepper_a: StepperContainer,
-    pub stepper_b: StepperContainer,
-    pub limit_sw_a: InputPinContainer,
-    pub limit_sw_b: InputPinContainer,
-    pub wifi: WifiContainer,
-    pub server: ServerContainer
+pub struct ClientContainer;
+pub struct BoardResources{
+    pub steppers: [Option<StepperContainer>;2],
+    pub switches: [Option<SwitchContainer>;2],
+    pub wifis:    [Option<WifiContainer>;1],
+    pub servers:  [Option<ServerContainer>;1],
+    pub clients:  [Option<ClientContainer>;1],
 }
 
-#[macro_export]
-macro_rules! polymorphic_enum {
-    ($name:ident $macro1:ident, $($variant:ident($type:path),)*) => {
-        pub enum $name { $($variant($type)),* }
-        #[macro_export]
-        macro_rules! $macro1 {
-            ($on:expr, |$with:ident| $body:block) => {
-                match $on {
-                    $($name::$variant($with) => $body )*
-                }
-            }
-        }
-    }
-}
-
-polymorphic_enum! {
-    WifiContainer use_wifi,
-    WifiM(MockWifi),
-}
-polymorphic_enum! {
-    ServerContainer use_server,
-    ServerM(MockServer),
-}
-polymorphic_enum! {
-    InputPinContainer use_input_pin,
-    PinMock(MockSwitch),
-}
-
-polymorphic_enum! {
-    StepperContainer use_stepper,
-    StepperMock(MockStepper),
-}
-
-
-impl embedded_svc::wifi::Wifi for WifiContainer {
-    type Error = bal::wifi::Error;
-
-    fn get_capabilities(&self) -> Result<EnumSet<Capability>, Self::Error> {
-        use_wifi!(&self, |s| {s.get_capabilities()})
-    }
-
-    fn get_status(&self) -> Status {
-        use_wifi!(&self, |s| {s.get_status()})
-    }
-
-    fn scan(&mut self) -> Result<Vec<AccessPointInfo>, Self::Error> {
-        use_wifi!(self, |s| {s.scan()})
-    }
-
-    fn get_configuration(&self) -> Result<Configuration, Self::Error> {
-        use_wifi!(&self, |s| {s.get_configuration()})
-    }
-
-    fn set_configuration(&mut self, conf: &Configuration) -> Result<(), Self::Error> {
-        use_wifi!(self, |s| {s.set_configuration(conf)})
-    }
-}
-pub struct BoardResourceBuilder {
-}
+pub struct BoardResourceBuilder {}
 
 impl<'a> BoardResourceBuilder{
     pub fn resolve(target_accel: MCDelay) -> Option<BoardResources> {
+        log::set_logger(&LOGGER)
+            .map(|()| log::set_max_level(LevelFilter::Debug));
         Some(BoardResources{
-            stepper_a: StepperContainer::StepperMock(MockStepper),
-            stepper_b: StepperContainer::StepperMock(MockStepper),
-            limit_sw_a: InputPinContainer::PinMock(MockSwitch),
-            limit_sw_b: InputPinContainer::PinMock(MockSwitch),
-            wifi: WifiContainer::WifiM(MockWifi),
-            server: ServerContainer::ServerM(MockServer)
+            steppers: [Some(StepperContainer{name: "axis a stepper"}),Some(StepperContainer{name: "axis b stepper"})],
+            switches: [Some(SwitchContainer{name: "axis a limit switch"}), Some(SwitchContainer{name: "axis b limit switch"})],
+            wifis: [Some(WifiContainer)],
+            servers: [Some(ServerContainer)],
+            clients: [Some(ClientContainer)],
         })
     }
 }
